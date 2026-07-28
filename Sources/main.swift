@@ -585,25 +585,25 @@ struct MetricTile: View {
     let detail: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(label)
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 19, weight: .bold, design: .rounded))
+                .font(.system(size: 17, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
             if let detail {
                 Text(detail)
-                    .font(.system(size: 9))
+                    .font(.system(size: 8))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 13))
+        .padding(8)
+        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 11))
     }
 }
 
@@ -618,21 +618,21 @@ struct RateGauge: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(.white.opacity(0.12), lineWidth: 8)
+            Circle().stroke(.white.opacity(0.14), lineWidth: 6)
             Circle()
                 .trim(from: 0, to: CGFloat(remaining) / 100)
-                .stroke(tint, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .stroke(tint, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             VStack(spacing: -1) {
                 Text("\(remaining)%")
-                    .font(.system(size: 21, weight: .heavy, design: .rounded))
+                    .font(.system(size: 18, weight: .heavy, design: .rounded))
                     .monospacedDigit()
                 Text("剩余")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: 8, weight: .medium))
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 72, height: 72)
+        .frame(width: 60, height: 60)
     }
 }
 
@@ -711,31 +711,35 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             compactHeader
             if store.expanded {
-                Divider().opacity(0.16).padding(.horizontal, 16)
+                Divider().opacity(0.18).padding(.horizontal, 12)
                 expandedContent
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .foregroundStyle(.white)
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.065, green: 0.075, blue: 0.10).opacity(0.97),
-                            Color(red: 0.095, green: 0.11, blue: 0.145).opacity(0.97),
+                            Color(red: 0.045, green: 0.055, blue: 0.08).opacity(0.66),
+                            Color(red: 0.08, green: 0.10, blue: 0.14).opacity(0.54),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24)
-                        .stroke(store.isAlarmActive ? Color.red.opacity(0.75) : Color.white.opacity(0.10), lineWidth: store.isAlarmActive ? 2 : 1)
-                )
+            }
+            .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(store.isAlarmActive ? Color.red.opacity(0.78) : Color.white.opacity(0.18), lineWidth: store.isAlarmActive ? 2 : 0.8)
+            )
         )
-        .padding(14)
+        .padding(8)
         .offset(x: store.isAlarmActive && alarmWiggle ? -7 : 0)
         .onReceive(store.$isAlarmActive.removeDuplicates()) { active in
             if active {
@@ -747,9 +751,9 @@ struct DashboardView: View {
     }
 
     private var compactHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             PetAnimationView(motion: store.isAlarmActive ? .alarm : .idle)
-                .frame(width: 84, height: 91)
+                .frame(width: 64, height: 70)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -758,10 +762,10 @@ struct DashboardView: View {
                 }
 
             if let snapshot = store.snapshot {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
                         Text(store.isAlarmActive ? "咚咚咚！额度只剩一点啦" : "短短 · Codex 用量")
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .lineLimit(1)
                         Spacer()
                         if store.isRefreshing {
@@ -769,7 +773,7 @@ struct DashboardView: View {
                         }
                     }
 
-                    HStack(spacing: 7) {
+                    HStack(spacing: 5) {
                         MetricTile(label: "今日", value: tokenText(store.todayTokens), detail: "Token")
                         MetricTile(label: "近 7 天", value: tokenText(store.sevenDayTokens), detail: "Token")
                         MetricTile(label: "累计", value: tokenText(snapshot.tokens.summary.lifetimeTokens), detail: "Token")
@@ -777,7 +781,7 @@ struct DashboardView: View {
                 }
 
                 RateGauge(remaining: store.minimumRemaining ?? 0)
-                    .padding(.trailing, 4)
+                    .padding(.trailing, 2)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("短短正在查看 Codex 用量…")
@@ -793,8 +797,8 @@ struct DashboardView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .overlay(alignment: .bottomTrailing) {
             Button {
@@ -803,17 +807,17 @@ struct DashboardView: View {
                 }
             } label: {
                 Image(systemName: store.expanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundStyle(.white.opacity(0.55))
             }
             .buttonStyle(.plain)
-            .padding(13)
+            .padding(9)
         }
     }
 
     private var expandedContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 if store.isAlarmActive {
                     HStack(spacing: 10) {
                         Image(systemName: "bell.badge.fill")
@@ -935,9 +939,9 @@ struct DashboardView: View {
                 }
                 .controlSize(.small)
             }
-            .padding(16)
+            .padding(12)
         }
-        .frame(maxHeight: 590)
+        .frame(maxHeight: 540)
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -961,6 +965,11 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private enum PanelSize {
+        static let compact = NSSize(width: 452, height: 116)
+        static let expanded = NSSize(width: 472, height: 680)
+    }
+
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
     private var store: UsageStore!
@@ -997,7 +1006,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configurePanel() {
         panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 142),
+            contentRect: NSRect(origin: .zero, size: PanelSize.compact),
             styleMask: [.borderless, .nonactivatingPanel, .resizable],
             backing: .buffered,
             defer: false
@@ -1009,11 +1018,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
-        panel.minSize = NSSize(width: 520, height: 142)
-        panel.maxSize = NSSize(width: 520, height: 760)
+        panel.minSize = PanelSize.compact
+        panel.maxSize = PanelSize.expanded
 
         hostingView = NSHostingView(rootView: DashboardView(store: store))
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 142))
+        let container = NSView(frame: NSRect(origin: .zero, size: PanelSize.compact))
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(hostingView)
         NSLayoutConstraint.activate([
@@ -1028,8 +1037,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resizePanel(expanded: Bool) {
         guard panel != nil else { return }
-        let targetHeight: CGFloat = expanded ? 760 : 142
-        panel.setContentSize(NSSize(width: 520, height: targetHeight))
+        panel.setContentSize(expanded ? PanelSize.expanded : PanelSize.compact)
         positionPanel()
     }
 
