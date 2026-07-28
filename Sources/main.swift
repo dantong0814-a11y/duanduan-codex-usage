@@ -386,8 +386,12 @@ final class UsageStore: ObservableObject {
     private func tokens(inLastDays days: Int) -> Int64 {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: calendar.date(byAdding: .day, value: -(days - 1), to: Date()) ?? Date())
+        let startKey = Self.dayFormatter.string(from: start)
         return dailyBuckets.reduce(0) { total, bucket in
-            guard let date = Self.dayFormatter.date(from: bucket.startDate), date >= start else { return total }
+            // Dates from the usage API are normalized as yyyy-MM-dd, so their
+            // lexical order is chronological. Avoid parsing every bucket again
+            // during SwiftUI body updates and animations.
+            guard bucket.startDate >= startKey else { return total }
             return total + bucket.tokens
         }
     }
@@ -742,7 +746,7 @@ struct RateWindowRow: View {
 
 struct DashboardView: View {
     @ObservedObject var store: UsageStore
-    @State private var alarmWiggle = false
+    @State private var alarmShakeOffset: CGFloat = 0
     private let mint = Color(red: 0.38, green: 0.91, blue: 0.72)
     private let cyan = Color(red: 0.30, green: 0.88, blue: 0.92)
 
@@ -803,12 +807,25 @@ struct DashboardView: View {
             .shadow(color: .black.opacity(0.32), radius: 22, y: 9)
         )
         .padding(6)
-        .offset(x: store.isAlarmActive && !store.isExhausted && alarmWiggle ? -7 : 0)
-        .onReceive(store.$isAlarmActive.removeDuplicates()) { active in
-            if active {
-                withAnimation(.easeInOut(duration: 0.12).repeatCount(12, autoreverses: true)) {
-                    alarmWiggle.toggle()
+        .offset(x: store.isAlarmActive && !store.isExhausted ? alarmShakeOffset : 0)
+        .task(id: store.isAlarmActive) {
+            alarmShakeOffset = 0
+            guard store.isAlarmActive, !store.isExhausted else { return }
+
+            // Keep the alarm shake finite and cancellable. A repeating SwiftUI
+            // transaction on the whole expanded dashboard can continuously
+            // rebuild the view graph and starve the 15-second dismissal timer.
+            for step in 0..<12 {
+                guard !Task.isCancelled, store.isAlarmActive else { break }
+                withAnimation(.linear(duration: 0.055)) {
+                    alarmShakeOffset = step.isMultiple(of: 2) ? -7 : 7
                 }
+                try? await Task.sleep(nanoseconds: 60_000_000)
+            }
+
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.08)) {
+                alarmShakeOffset = 0
             }
         }
     }
