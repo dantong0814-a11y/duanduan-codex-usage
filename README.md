@@ -7,7 +7,7 @@ usage dashboard — and makes Duanduan jump out and knock when only 10% remains.
 
 ## What it shows
 
-- A compact, translucent frosted-glass panel that stays out of the way
+- A compact midnight capsule with a crisp, high-contrast core and a subtle translucent edge glow
 - Every active Codex rate-limit window
 - Used and remaining percentage
 - Window duration and reset time

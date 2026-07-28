@@ -585,25 +585,29 @@ struct MetricTile: View {
     let detail: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.48))
             Text(value)
-                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .font(.system(size: 19, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
             if let detail {
                 Text(detail)
                     .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.white.opacity(0.32))
                     .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 11))
+        .padding(10)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.075), lineWidth: 0.8)
+        }
     }
 }
 
@@ -698,20 +702,24 @@ struct RateWindowRow: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
         }
-        .padding(11)
-        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 13))
+        .padding(12)
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 0.8)
+        }
     }
 }
 
 struct DashboardView: View {
     @ObservedObject var store: UsageStore
     @State private var alarmWiggle = false
+    private let mint = Color(red: 0.38, green: 0.91, blue: 0.72)
 
     var body: some View {
         VStack(spacing: 0) {
             compactHeader
             if store.expanded {
-                Divider().opacity(0.18).padding(.horizontal, 12)
                 expandedContent
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -719,27 +727,26 @@ struct DashboardView: View {
         .foregroundStyle(.white)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.045, green: 0.055, blue: 0.08).opacity(0.66),
-                            Color(red: 0.08, green: 0.10, blue: 0.14).opacity(0.54),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                        store.isAlarmActive
+                            ? Color(red: 0.10, green: 0.025, blue: 0.035).opacity(0.97)
+                            : Color(red: 0.035, green: 0.047, blue: 0.065).opacity(0.96)
                     )
-                )
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(
+                        store.isAlarmActive ? Color.red.opacity(0.72) : mint.opacity(0.16),
+                        lineWidth: store.isAlarmActive ? 2 : 1
+                    )
+                    .blur(radius: store.isAlarmActive ? 0 : 0.2)
             }
-            .shadow(color: .black.opacity(0.24), radius: 16, y: 7)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(store.isAlarmActive ? Color.red.opacity(0.78) : Color.white.opacity(0.18), lineWidth: store.isAlarmActive ? 2 : 0.8)
+            .shadow(
+                color: store.isAlarmActive ? Color.red.opacity(0.24) : mint.opacity(0.08),
+                radius: store.isAlarmActive ? 20 : 16
             )
+            .shadow(color: .black.opacity(0.32), radius: 22, y: 9)
         )
-        .padding(8)
+        .padding(6)
         .offset(x: store.isAlarmActive && alarmWiggle ? -7 : 0)
         .onReceive(store.$isAlarmActive.removeDuplicates()) { active in
             if active {
@@ -751,9 +758,15 @@ struct DashboardView: View {
     }
 
     private var compactHeader: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             PetAnimationView(motion: store.isAlarmActive ? .alarm : .idle)
-                .frame(width: 64, height: 70)
+                .frame(width: 76, height: 84)
+                .background {
+                    Circle()
+                        .fill(store.isAlarmActive ? Color.red.opacity(0.18) : mint.opacity(0.12))
+                        .blur(radius: 14)
+                        .scaleEffect(1.15)
+                }
                 .contentShape(Rectangle())
                 .onTapGesture {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
@@ -762,26 +775,45 @@ struct DashboardView: View {
                 }
 
             if let snapshot = store.snapshot {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text(store.isAlarmActive ? "咚咚咚！额度只剩一点啦" : "短短 · Codex 用量")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .lineLimit(1)
-                        Spacer()
-                        if store.isRefreshing {
-                            ProgressView().controlSize(.mini)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(store.isAlarmActive ? "CODEX ALERT" : "CODEX BUDGET")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .tracking(1.1)
+                        .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.92) : Color.white.opacity(0.46))
+
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text("\(store.minimumRemaining ?? 0)%")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                        Text(store.isAlarmActive ? "快敲门" : "剩余")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(store.isAlarmActive ? Color.red : mint)
+                    }
+
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.10))
+                            Capsule()
+                                .fill(store.isAlarmActive ? Color.red : mint)
+                                .frame(
+                                    width: geometry.size.width
+                                        * CGFloat(max(0, min(100, store.minimumRemaining ?? 0)))
+                                        / 100
+                                )
                         }
                     }
+                    .frame(height: 6)
 
-                    HStack(spacing: 5) {
-                        MetricTile(label: "今日", value: tokenText(store.todayTokens), detail: "Token")
-                        MetricTile(label: "近 7 天", value: tokenText(store.sevenDayTokens), detail: "Token")
-                        MetricTile(label: "累计", value: tokenText(snapshot.tokens.summary.lifetimeTokens), detail: "Token")
-                    }
+                    Text(
+                        store.isAlarmActive
+                            ? "额度只剩 10% · 短短来敲门了"
+                            : "7天 \(tokenText(store.sevenDayTokens))  ·  累计 \(tokenText(snapshot.tokens.summary.lifetimeTokens))"
+                    )
+                    .font(.system(size: 9, design: .rounded))
+                    .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.82) : Color.white.opacity(0.48))
+                    .lineLimit(1)
                 }
-
-                RateGauge(remaining: store.minimumRemaining ?? 0)
-                    .padding(.trailing, 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("短短正在查看 Codex 用量…")
@@ -796,23 +828,26 @@ struct DashboardView: View {
                 }
                 Spacer()
             }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottomTrailing) {
+
             Button {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
                     store.expanded.toggle()
                 }
             } label: {
-                Image(systemName: store.expanded ? "chevron.up.circle.fill" : "chevron.down.circle.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white.opacity(0.55))
+                Image(systemName: store.expanded ? "chevron.up" : "chevron.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.68))
+                    .frame(width: 38, height: 38)
+                    .background(Color.white.opacity(0.065), in: Circle())
+                    .overlay {
+                        Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+                    }
             }
             .buttonStyle(.plain)
-            .padding(9)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
     }
 
     private var expandedContent: some View {
@@ -888,8 +923,12 @@ struct DashboardView: View {
 
                 sectionTitle("最近 14 个有记录日期")
                 UsageBarChart(buckets: store.dailyBuckets)
-                    .padding(11)
-                    .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(12)
+                    .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.white.opacity(0.07), lineWidth: 0.8)
+                    }
 
                 DisclosureGroup("查看全部每日 Token 明细") {
                     LazyVStack(spacing: 0) {
@@ -939,9 +978,10 @@ struct DashboardView: View {
                 }
                 .controlSize(.small)
             }
-            .padding(12)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
         }
-        .frame(maxHeight: 540)
+        .frame(maxHeight: 510)
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -967,7 +1007,7 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private enum PanelSize {
         static let compact = NSSize(width: 452, height: 116)
-        static let expanded = NSSize(width: 472, height: 680)
+        static let expanded = NSSize(width: 500, height: 640)
     }
 
     private var statusItem: NSStatusItem!
