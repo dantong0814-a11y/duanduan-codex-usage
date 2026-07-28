@@ -5,9 +5,14 @@ usage dashboard — and makes Duanduan jump out and knock when only 10% remains.
 
 ![Duanduan Codex Usage demo](docs/demo-dashboard.png)
 
+When the remaining quota reaches zero, Duanduan collapses and stays down until
+the quota becomes available again:
+
+![Duanduan fainted state](docs/fainted-state.png)
+
 ## What it shows
 
-- A compact midnight capsule with a crisp, high-contrast core and a subtle translucent edge glow
+- A compact cyan-blue transparent panel; the expanded view adds a colored blur for readability
 - Every active Codex rate-limit window
 - Used and remaining percentage
 - Window duration and reset time
@@ -22,6 +27,10 @@ When any active limit reaches **10% remaining or less**, Duanduan:
 - shakes the floating panel
 - plays a sound
 - sends a macOS notification
+
+At **0% remaining**, Duanduan plays a one-shot collapse animation and remains
+fainted. The normal idle animation returns automatically after the quota
+recovers.
 
 The automatic warning fires once per reset window. A built-in test button lets
 you preview it at any time.
@@ -66,7 +75,8 @@ open "build/Duanduan Usage.app" --args --demo --expanded
 ```
 
 `--demo` uses generated sample data and never reads an account. Add
-`--test-alarm` to preview the 10% warning.
+`--test-alarm` to preview the 10% warning, or `--test-fainted` to preview the
+0% collapse state.
 
 ## Data accuracy and limitations
 
@@ -88,6 +98,7 @@ See [PRIVACY.md](PRIVACY.md) for the complete privacy statement.
 
 这是一个 macOS 本机小助手：显示 Codex 订阅额度与 Token 活动；当任一额度
 只剩 10% 时，短短会跳出来挥爪敲门、震动面板并发送通知。
+额度变成 0% 时，短短会晕倒并保持趴下；额度恢复后自动醒来。
 
 安装后不会读取或保存密码、API Key。所有数据都通过本机 Codex 登录状态读取，
 没有输入/输出 Token 拆分的字段就不会自行估算。

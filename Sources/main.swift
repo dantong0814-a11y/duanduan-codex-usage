@@ -249,10 +249,12 @@ final class UsageStore: ObservableObject {
         }
     }
     @Published var isAlarmActive = false
+    @Published private var isFaintedPreview = false
 
     private let reader = CodexUsageReader()
     private var refreshTimer: Timer?
     private var alarmTimer: Timer?
+    private var faintedPreviewTimer: Timer?
     var onAlarm: ((Int, Bool) -> Void)?
     var onExpandedChange: ((Bool) -> Void)?
 
@@ -287,6 +289,16 @@ final class UsageStore: ObservableObject {
     func testAlarm() {
         let remaining = minimumRemaining ?? 10
         activateAlarm(remaining: min(10, remaining), isTest: true)
+    }
+
+    func testFainted() {
+        dismissAlarm()
+        faintedPreviewTimer?.invalidate()
+        isFaintedPreview = true
+        expanded = false
+        faintedPreviewTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.isFaintedPreview = false }
+        }
     }
 
     func dismissAlarm() {
@@ -342,6 +354,14 @@ final class UsageStore: ObservableObject {
 
     var minimumRemaining: Int? {
         activeRateWindows.map(\.window.remainingPercent).min()
+    }
+
+    var isExhausted: Bool {
+        isFaintedPreview || minimumRemaining == 0
+    }
+
+    var displayedRemaining: Int {
+        isExhausted ? 0 : (minimumRemaining ?? 0)
     }
 
     var planName: String {
@@ -479,6 +499,7 @@ func resetText(_ timestamp: Int64?) -> String {
 enum PetMotion: Equatable {
     case idle
     case alarm
+    case fainted
 }
 
 final class SpriteAnimationNSView: NSView {
@@ -521,6 +542,7 @@ final class SpriteAnimationNSView: NSView {
             (0, "idle", 6),
             (3, "waving", 4),
             (4, "jumping", 6),
+            (5, "fainted", 8),
         ]
         for definition in definitions {
             var frames: [NSImage] = []
@@ -551,7 +573,9 @@ final class SpriteAnimationNSView: NSView {
 
     private func updateFrame() {
         let row: Int
-        if motion == .alarm {
+        if motion == .fainted {
+            row = 5
+        } else if motion == .alarm {
             // Alternate jumping and paw-waving: ShortShort pops up, then "knocks".
             let phase = frameIndex % 20
             row = phase < 8 ? 4 : 3
@@ -559,7 +583,12 @@ final class SpriteAnimationNSView: NSView {
             row = 0
         }
         guard let frames = framesByRow[row], !frames.isEmpty else { return }
-        imageView.image = frames[frameIndex % frames.count]
+        if motion == .fainted {
+            // Play the collapse once, then keep ShortShort lying down until quota recovers.
+            imageView.image = frames[min(frameIndex, min(4, frames.count - 1))]
+        } else {
+            imageView.image = frames[frameIndex % frames.count]
+        }
     }
 }
 
@@ -715,6 +744,34 @@ struct DashboardView: View {
     @ObservedObject var store: UsageStore
     @State private var alarmWiggle = false
     private let mint = Color(red: 0.38, green: 0.91, blue: 0.72)
+    private let cyan = Color(red: 0.30, green: 0.88, blue: 0.92)
+
+    private var panelAccent: Color {
+        if store.isExhausted { return Color(red: 0.63, green: 0.67, blue: 0.96) }
+        if store.isAlarmActive { return .red }
+        return cyan
+    }
+
+    private var glassGradient: LinearGradient {
+        let colors: [Color]
+        if store.isExhausted {
+            colors = [
+                Color(red: 0.12, green: 0.13, blue: 0.30).opacity(0.68),
+                Color(red: 0.12, green: 0.24, blue: 0.34).opacity(0.54),
+            ]
+        } else if store.isAlarmActive {
+            colors = [
+                Color(red: 0.34, green: 0.03, blue: 0.08).opacity(0.70),
+                Color(red: 0.15, green: 0.04, blue: 0.12).opacity(0.58),
+            ]
+        } else {
+            colors = [
+                Color(red: 0.02, green: 0.30, blue: 0.34).opacity(0.64),
+                Color(red: 0.03, green: 0.12, blue: 0.28).opacity(0.58),
+            ]
+        }
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -727,27 +784,26 @@ struct DashboardView: View {
         .foregroundStyle(.white)
         .background(
             ZStack {
+                if store.expanded {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                }
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .fill(
-                        store.isAlarmActive
-                            ? Color(red: 0.10, green: 0.025, blue: 0.035).opacity(0.97)
-                            : Color(red: 0.035, green: 0.047, blue: 0.065).opacity(0.96)
-                    )
+                    .fill(glassGradient)
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .stroke(
-                        store.isAlarmActive ? Color.red.opacity(0.72) : mint.opacity(0.16),
+                        panelAccent.opacity(store.isAlarmActive ? 0.72 : 0.36),
                         lineWidth: store.isAlarmActive ? 2 : 1
                     )
-                    .blur(radius: store.isAlarmActive ? 0 : 0.2)
             }
             .shadow(
-                color: store.isAlarmActive ? Color.red.opacity(0.24) : mint.opacity(0.08),
+                color: panelAccent.opacity(store.isAlarmActive ? 0.24 : 0.14),
                 radius: store.isAlarmActive ? 20 : 16
             )
             .shadow(color: .black.opacity(0.32), radius: 22, y: 9)
         )
         .padding(6)
-        .offset(x: store.isAlarmActive && alarmWiggle ? -7 : 0)
+        .offset(x: store.isAlarmActive && !store.isExhausted && alarmWiggle ? -7 : 0)
         .onReceive(store.$isAlarmActive.removeDuplicates()) { active in
             if active {
                 withAnimation(.easeInOut(duration: 0.12).repeatCount(12, autoreverses: true)) {
@@ -759,11 +815,13 @@ struct DashboardView: View {
 
     private var compactHeader: some View {
         HStack(spacing: 12) {
-            PetAnimationView(motion: store.isAlarmActive ? .alarm : .idle)
+            PetAnimationView(
+                motion: store.isExhausted ? .fainted : (store.isAlarmActive ? .alarm : .idle)
+            )
                 .frame(width: 76, height: 84)
                 .background {
                     Circle()
-                        .fill(store.isAlarmActive ? Color.red.opacity(0.18) : mint.opacity(0.12))
+                        .fill(panelAccent.opacity(store.isExhausted ? 0.16 : 0.13))
                         .blur(radius: 14)
                         .scaleEffect(1.15)
                 }
@@ -776,28 +834,36 @@ struct DashboardView: View {
 
             if let snapshot = store.snapshot {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.isAlarmActive ? "CODEX ALERT" : "CODEX BUDGET")
+                    Text(
+                        store.isExhausted
+                            ? "CODEX EMPTY"
+                            : (store.isAlarmActive ? "CODEX ALERT" : "CODEX BUDGET")
+                    )
                         .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .tracking(1.1)
-                        .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.92) : Color.white.opacity(0.46))
+                        .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.92) : Color.white.opacity(0.58))
 
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text("\(store.minimumRemaining ?? 0)%")
+                        Text("\(store.displayedRemaining)%")
                             .font(.system(size: 30, weight: .bold, design: .rounded))
                             .monospacedDigit()
-                        Text(store.isAlarmActive ? "快敲门" : "剩余")
+                        Text(
+                            store.isExhausted
+                                ? "短短晕倒了"
+                                : (store.isAlarmActive ? "快敲门" : "剩余")
+                        )
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(store.isAlarmActive ? Color.red : mint)
+                            .foregroundStyle(store.isExhausted ? panelAccent : (store.isAlarmActive ? Color.red : mint))
                     }
 
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color.white.opacity(0.10))
                             Capsule()
-                                .fill(store.isAlarmActive ? Color.red : mint)
+                                .fill(panelAccent)
                                 .frame(
                                     width: geometry.size.width
-                                        * CGFloat(max(0, min(100, store.minimumRemaining ?? 0)))
+                                        * CGFloat(max(0, min(100, store.displayedRemaining)))
                                         / 100
                                 )
                         }
@@ -805,12 +871,20 @@ struct DashboardView: View {
                     .frame(height: 6)
 
                     Text(
-                        store.isAlarmActive
-                            ? "额度只剩 10% · 短短来敲门了"
-                            : "7天 \(tokenText(store.sevenDayTokens))  ·  累计 \(tokenText(snapshot.tokens.summary.lifetimeTokens))"
+                        store.isExhausted
+                            ? "额度已经用完 · 恢复后短短会自动醒来"
+                            : (
+                                store.isAlarmActive
+                                    ? "额度只剩 10% · 短短来敲门了"
+                                    : "7天 \(tokenText(store.sevenDayTokens))  ·  累计 \(tokenText(snapshot.tokens.summary.lifetimeTokens))"
+                            )
                     )
                     .font(.system(size: 9, design: .rounded))
-                    .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.82) : Color.white.opacity(0.48))
+                    .foregroundStyle(
+                        store.isExhausted
+                            ? Color.white.opacity(0.60)
+                            : (store.isAlarmActive ? Color.red.opacity(0.82) : Color.white.opacity(0.48))
+                    )
                     .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1042,6 +1116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.store.testAlarm()
             }
         }
+        if ProcessInfo.processInfo.arguments.contains("--test-fainted") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.store.testFainted()
+            }
+        }
     }
 
     private func configurePanel() {
@@ -1092,6 +1171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "显示／隐藏短短用量", action: #selector(togglePanel), keyEquivalent: "")
         menu.addItem(withTitle: "立即刷新", action: #selector(refreshUsage), keyEquivalent: "r")
         menu.addItem(withTitle: "测试 10% 敲门报警", action: #selector(testAlarm), keyEquivalent: "")
+        menu.addItem(withTitle: "测试 0% 短短晕倒", action: #selector(testFainted), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "退出短短用量助手", action: #selector(quit), keyEquivalent: "q")
 
@@ -1129,6 +1209,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.testAlarm()
     }
 
+    @objc private func testFainted() {
+        store.testFainted()
+        showPanel()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -1154,8 +1239,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { NSSound(named: "Ping")?.play() }
 
         let content = UNMutableNotificationContent()
-        content.title = isTest ? "短短敲门测试" : "咚咚咚！短短来提醒你"
-        content.body = "Codex 可用额度剩余 \(remaining)%，即将用完。"
+        content.title = remaining == 0
+            ? "额度用完了，短短晕倒了"
+            : (isTest ? "短短敲门测试" : "咚咚咚！短短来提醒你")
+        content.body = remaining == 0
+            ? "Codex 可用额度为 0%。额度恢复后短短会自动醒来。"
+            : "Codex 可用额度剩余 \(remaining)%，即将用完。"
         content.sound = .default
         let request = UNNotificationRequest(identifier: "duanduan-usage-\(UUID().uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
