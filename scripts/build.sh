@@ -27,9 +27,11 @@ xcrun swiftc \
   -swift-version 5 \
   -O \
   -framework AppKit \
+  -framework AVFoundation \
   -framework SwiftUI \
   -framework UserNotifications \
-  "${PROJECT_DIR}/Sources/main.swift" \
+  -lsqlite3 \
+  "${PROJECT_DIR}"/Sources/*.swift \
   -o "${CONTENTS}/MacOS/DuanduanUsage"
 
 codesign --force --deep --sign - "${APP_PATH}"

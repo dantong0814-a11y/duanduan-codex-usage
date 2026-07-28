@@ -1,7 +1,8 @@
-# Duanduan Codex Usage
+# Duanduan Codex Companion
 
 A tiny open-source macOS companion that gives your Codex desktop pet a live
-usage dashboard — and makes Duanduan jump out and knock when only 10% remains.
+usage dashboard, follows local conversation progress, and makes Duanduan jump
+out and knock when Codex needs you or only 10% remains.
 
 ![Duanduan Codex Usage demo](docs/demo-dashboard.png)
 
@@ -13,6 +14,11 @@ the quota becomes available again:
 ## What it shows
 
 - A compact cyan-blue transparent panel; the expanded view adds a colored blur for readability
+- Live Codex conversation states: working, needs input, ready, and blocked
+- Privacy-safe progress labels such as analyzing, editing files, running commands, and checking the UI
+- Up to eight recent active conversations, prioritized by attention needed
+- Elapsed time and tool-call count for each active conversation
+- Automatic respect for the macOS Reduce Motion accessibility setting
 - Every active Codex rate-limit window
 - Used and remaining percentage
 - Window duration and reset time
@@ -34,6 +40,26 @@ recovers.
 
 The automatic warning fires once per reset window. A built-in test button lets
 you preview it at any time.
+
+## Conversation companion
+
+Duanduan watches the local Codex rollout event stream in read-only mode. It
+does not attach to, steer, interrupt, or modify a conversation.
+
+- **Working:** Duanduan animates and reports the current activity category.
+- **Needs input:** Duanduan knocks, expands the activity panel, and sends a
+  macOS notification.
+- **Ready:** Duanduan celebrates and marks the conversation as unread until
+  you open it.
+- **Blocked:** Duanduan shows a failed state and asks you to inspect the task.
+
+Select an activity to open its original conversation through the local
+`codex://threads/<id>` deep link. Text progress is always available. Optional
+Chinese voice announcements can be enabled from the activity panel or menu-bar
+menu; voice progress is throttled so normal tool activity is not noisy.
+
+Codex does not expose a trustworthy completion percentage. Duanduan reports
+real phases, duration, and tool activity rather than inventing a percentage.
 
 ## Requirements
 
@@ -57,7 +83,7 @@ The installer builds the app locally, places it at
 
 - Click Duanduan or the arrow to expand the complete dashboard.
 - Use the paw icon in the macOS menu bar to refresh, test the warning, hide the
-  panel, or quit.
+  panel, toggle conversation monitoring or voice progress, or quit.
 - Drag the floating panel to move it.
 - Data refreshes every 60 seconds.
 
@@ -74,9 +100,11 @@ The installer builds the app locally, places it at
 open "build/Duanduan Usage.app" --args --demo --expanded
 ```
 
-`--demo` uses generated sample data and never reads an account. Add
+`--demo` uses generated sample data and never reads an account or local
+conversation. Add
 `--test-alarm` to preview the 10% warning, or `--test-fainted` to preview the
-0% collapse state.
+0% collapse state. Add `--test-activity` to preview working, needs-input,
+ready, and blocked states.
 
 ## Data accuracy and limitations
 
@@ -92,16 +120,25 @@ reported with a delay.
 Codex app-server is experimental, so a future Codex update may require a
 protocol adjustment.
 
+Conversation progress is derived from structured local rollout events under
+the current Codex home folder. The monitor reads only event metadata needed for
+state, timing, workspace name, and tool category. It does not display message
+text, reasoning content, command output, or file contents. Because the local
+rollout format is an internal integration surface, future Codex versions may
+also require parser updates.
+
 See [PRIVACY.md](PRIVACY.md) for the complete privacy statement.
 
 ## 中文说明
 
-这是一个 macOS 本机小助手：显示 Codex 订阅额度与 Token 活动；当任一额度
-只剩 10% 时，短短会跳出来挥爪敲门、震动面板并发送通知。
+这是一个 macOS 本机小助手：显示 Codex 订阅额度、Token 活动和真实对话进度；
+工作中会播报“分析、编辑文件、执行命令”等阶段，需要确认时短短会敲门，
+完成后会庆祝并可点击返回原对话。当任一额度只剩 10% 时，短短也会提醒。
 额度变成 0% 时，短短会晕倒并保持趴下；额度恢复后自动醒来。
 
 安装后不会读取或保存密码、API Key。所有数据都通过本机 Codex 登录状态读取，
-没有输入/输出 Token 拆分的字段就不会自行估算。
+对话监听只解析状态所需的事件类型，不展示完整消息、推理、命令输出或文件内容。
+Codex 没有提供可靠的完成百分比，因此不会自行估算。
 
 ## License
 

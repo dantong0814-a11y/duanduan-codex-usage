@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import SwiftUI
@@ -250,23 +251,190 @@ final class UsageStore: ObservableObject {
     }
     @Published var isAlarmActive = false
     @Published private var isFaintedPreview = false
+    @Published var activities: [CodexActivity] = []
+    @Published private(set) var activityMonitoringEnabled: Bool
+    @Published private(set) var voiceProgressEnabled: Bool
 
     private let reader = CodexUsageReader()
+    private let activityMonitor = CodexActivityMonitor()
     private var refreshTimer: Timer?
     private var alarmTimer: Timer?
     private var faintedPreviewTimer: Timer?
+    private var activityPreviewTimers: [Timer] = []
+    private var activityPreviewUntil: Date?
+    private var lastVoiceAt = Date.distantPast
+    private var readCompletions: [String: TimeInterval]
     var onAlarm: ((Int, Bool) -> Void)?
+    var onActivityEvent: ((CodexActivity, Bool, Bool) -> Void)?
     var onExpandedChange: ((Bool) -> Void)?
+
+    init() {
+        activityMonitoringEnabled = UserDefaults.standard.object(
+            forKey: "activityMonitoringEnabled"
+        ) as? Bool ?? true
+        voiceProgressEnabled = UserDefaults.standard.bool(forKey: "voiceProgressEnabled")
+        readCompletions = UserDefaults.standard.dictionary(
+            forKey: "activityReadCompletions"
+        ) as? [String: TimeInterval] ?? [:]
+    }
 
     func start(demo: Bool = false) {
         if demo {
             snapshot = Self.demoSnapshot
             return
         }
+        startActivityMonitoringIfNeeded()
         refresh()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+    }
+
+    private func startActivityMonitoringIfNeeded() {
+        guard activityMonitoringEnabled else { return }
+        activityMonitor.start { [weak self] activities in
+            self?.receiveActivities(activities)
+        }
+    }
+
+    private func receiveActivities(_ incoming: [CodexActivity]) {
+        guard activityPreviewUntil.map({ Date() >= $0 }) ?? true else { return }
+
+        let previous = Dictionary(uniqueKeysWithValues: activities.map { ($0.id, $0) })
+        let visible = incoming.map { activity -> CodexActivity in
+            var result = activity
+            if result.state == .ready,
+               let completedAt = result.completedAt,
+               readCompletions[result.id, default: 0] >= completedAt.timeIntervalSince1970 {
+                result.state = .idle
+                result.detail = "最近使用"
+            }
+            return result
+        }
+
+        guard visible != activities else { return }
+        activities = visible
+
+        for activity in visible {
+            guard activity.state != .idle else { continue }
+            let old = previous[activity.id]
+            let stateChanged = old?.state != activity.state
+            let detailChanged = old?.detail != activity.detail
+            let important = stateChanged && [.needsInput, .ready, .blocked].contains(activity.state)
+            let shouldSpeakProgress = voiceProgressEnabled
+                && activity.state == .running
+                && detailChanged
+                && Date().timeIntervalSince(lastVoiceAt) >= 8
+            let shouldSpeak = voiceProgressEnabled && (important || shouldSpeakProgress)
+
+            if shouldSpeak { lastVoiceAt = Date() }
+            if important || shouldSpeak {
+                onActivityEvent?(activity, important, shouldSpeak)
+            }
+        }
+    }
+
+    func toggleActivityMonitoring() {
+        activityMonitoringEnabled.toggle()
+        UserDefaults.standard.set(activityMonitoringEnabled, forKey: "activityMonitoringEnabled")
+        if activityMonitoringEnabled {
+            startActivityMonitoringIfNeeded()
+        } else {
+            activityMonitor.stop()
+            activities = []
+        }
+    }
+
+    func toggleVoiceProgress() {
+        voiceProgressEnabled.toggle()
+        UserDefaults.standard.set(voiceProgressEnabled, forKey: "voiceProgressEnabled")
+    }
+
+    func openActivity(_ activity: CodexActivity) {
+        if let completedAt = activity.completedAt {
+            readCompletions[activity.id] = completedAt.timeIntervalSince1970
+            UserDefaults.standard.set(readCompletions, forKey: "activityReadCompletions")
+        }
+        if let index = activities.firstIndex(where: { $0.id == activity.id }),
+           activities[index].state == .ready {
+            activities[index].state = .idle
+            activities[index].detail = "最近使用"
+        }
+        if let url = activity.threadURL {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func testActivityProgress() {
+        activityPreviewTimers.forEach { $0.invalidate() }
+        activityPreviewTimers.removeAll()
+        activityPreviewUntil = Date().addingTimeInterval(15)
+        expanded = true
+
+        let id = "duanduan-activity-preview"
+        let startedAt = Date()
+        let preview = CodexActivity(
+            id: id,
+            workspace: "短短功能测试",
+            detail: "正在分析和规划",
+            state: .running,
+            startedAt: startedAt,
+            completedAt: nil,
+            updatedAt: Date(),
+            toolCount: 0
+        )
+        activities = [preview]
+        onActivityEvent?(preview, false, voiceProgressEnabled)
+
+        scheduleActivityPreview(after: 3) { [weak self] in
+            guard let self else { return }
+            var waiting = preview
+            waiting.state = .needsInput
+            waiting.detail = "正在等你确认或回答"
+            waiting.updatedAt = Date()
+            self.activities = [waiting]
+            self.onActivityEvent?(waiting, true, self.voiceProgressEnabled)
+        }
+        scheduleActivityPreview(after: 7) { [weak self] in
+            guard let self else { return }
+            var ready = preview
+            ready.state = .ready
+            ready.detail = "任务已经完成"
+            ready.completedAt = Date()
+            ready.updatedAt = Date()
+            ready.toolCount = 4
+            self.activities = [ready]
+            self.onActivityEvent?(ready, true, self.voiceProgressEnabled)
+        }
+        scheduleActivityPreview(after: 11) { [weak self] in
+            guard let self else { return }
+            var blocked = preview
+            blocked.state = .blocked
+            blocked.detail = "任务遇到问题，需要查看"
+            blocked.completedAt = Date()
+            blocked.updatedAt = Date()
+            blocked.toolCount = 5
+            self.activities = [blocked]
+            self.onActivityEvent?(blocked, true, self.voiceProgressEnabled)
+        }
+        scheduleActivityPreview(after: 14) { [weak self] in
+            self?.activityPreviewUntil = nil
+            self?.activities = []
+        }
+    }
+
+    private func scheduleActivityPreview(
+        after interval: TimeInterval,
+        action: @escaping @MainActor () -> Void
+    ) {
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { _ in
+            Task { @MainActor in action() }
+        }
+        activityPreviewTimers.append(timer)
+    }
+
+    var primaryActivity: CodexActivity? {
+        activities.first { $0.state != .idle }
     }
 
     func refresh() {
@@ -498,12 +666,24 @@ func resetText(_ timestamp: Int64?) -> String {
     return formatter.string(from: date)
 }
 
+func activityDurationText(_ interval: TimeInterval) -> String {
+    let seconds = max(0, Int(interval))
+    if seconds < 60 { return "\(seconds) 秒" }
+    let minutes = seconds / 60
+    if minutes < 60 { return "\(minutes) 分钟" }
+    return "\(minutes / 60) 小时 \(minutes % 60) 分"
+}
+
 // MARK: - Pet animation
 
 enum PetMotion: Equatable {
     case idle
     case alarm
     case fainted
+    case working
+    case waiting
+    case ready
+    case blocked
 }
 
 final class SpriteAnimationNSView: NSView {
@@ -527,6 +707,12 @@ final class SpriteAnimationNSView: NSView {
         imageView.animates = false
         addSubview(imageView)
         loadAtlas()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessibilityDisplayOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
         startTimer()
     }
 
@@ -536,10 +722,19 @@ final class SpriteAnimationNSView: NSView {
         imageView.animates = false
         addSubview(imageView)
         loadAtlas()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessibilityDisplayOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil
+        )
         startTimer()
     }
 
-    deinit { timer?.invalidate() }
+    deinit {
+        timer?.invalidate()
+        NotificationCenter.default.removeObserver(self)
+    }
 
     private func loadAtlas() {
         let definitions: [(row: Int, name: String, count: Int)] = [
@@ -562,12 +757,23 @@ final class SpriteAnimationNSView: NSView {
     }
 
     private func startTimer() {
+        timer?.invalidate()
+        timer = nil
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            frameIndex = 0
+            updateFrame()
+            return
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.frameIndex += 1
             self.updateFrame()
         }
         updateFrame()
+    }
+
+    @objc private func accessibilityDisplayOptionsChanged() {
+        startTimer()
     }
 
     override func layout() {
@@ -577,17 +783,26 @@ final class SpriteAnimationNSView: NSView {
 
     private func updateFrame() {
         let row: Int
-        if motion == .fainted {
+        if motion == .fainted || motion == .blocked {
             row = 5
         } else if motion == .alarm {
             // Alternate jumping and paw-waving: ShortShort pops up, then "knocks".
             let phase = frameIndex % 20
             row = phase < 8 ? 4 : 3
+        } else if motion == .working {
+            // Stay calm while working, with an occasional energetic hop.
+            let phase = frameIndex % 24
+            row = (12..<18).contains(phase) ? 4 : 0
+        } else if motion == .waiting {
+            row = 3
+        } else if motion == .ready {
+            let phase = frameIndex % 18
+            row = phase < 7 ? 4 : 3
         } else {
             row = 0
         }
         guard let frames = framesByRow[row], !frames.isEmpty else { return }
-        if motion == .fainted {
+        if motion == .fainted || motion == .blocked {
             // Play the collapse once, then keep ShortShort lying down until quota recovers.
             imageView.image = frames[min(frameIndex, min(4, frames.count - 1))]
         } else {
@@ -744,6 +959,74 @@ struct RateWindowRow: View {
     }
 }
 
+struct ActivityRowView: View {
+    let activity: CodexActivity
+    let action: () -> Void
+
+    private var tint: Color {
+        switch activity.state {
+        case .idle: return .secondary
+        case .running: return .cyan
+        case .needsInput: return .orange
+        case .ready: return .mint
+        case .blocked: return .red
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: activity.state.symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 30, height: 30)
+                    .background(tint.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(activity.workspace)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                        Text(activity.state.title)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundStyle(tint)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(tint.opacity(0.12), in: Capsule())
+                    }
+                    Text(activity.detail)
+                        .font(.system(size: 10, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(activityDurationText(activity.elapsed))
+                    if activity.toolCount > 0 {
+                        Text("\(activity.toolCount) 次工具")
+                    }
+                }
+                .font(.system(size: 8, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.34))
+
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.35))
+            }
+            .padding(10)
+            .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(tint.opacity(0.16), lineWidth: 0.8)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("打开对应的 Codex 对话")
+    }
+}
+
 struct DashboardView: View {
     @ObservedObject var store: UsageStore
     @State private var alarmShakeOffset: CGFloat = 0
@@ -753,7 +1036,42 @@ struct DashboardView: View {
     private var panelAccent: Color {
         if store.isExhausted { return Color(red: 0.63, green: 0.67, blue: 0.96) }
         if store.isAlarmActive { return .red }
+        if let activity = store.primaryActivity { return activityTint(activity.state) }
         return cyan
+    }
+
+    private var petMotion: PetMotion {
+        if store.isExhausted { return .fainted }
+        if store.isAlarmActive { return .alarm }
+        switch store.primaryActivity?.state {
+        case .running: return .working
+        case .needsInput: return .waiting
+        case .ready: return .ready
+        case .blocked: return .blocked
+        case .idle, .none: return .idle
+        }
+    }
+
+    private var compactStatusTitle: String {
+        if store.isExhausted { return "CODEX EMPTY" }
+        if store.isAlarmActive { return "CODEX ALERT" }
+        switch store.primaryActivity?.state {
+        case .running: return "CODEX WORKING"
+        case .needsInput: return "CODEX NEEDS YOU"
+        case .ready: return "CODEX READY"
+        case .blocked: return "CODEX BLOCKED"
+        case .idle, .none: return "CODEX BUDGET"
+        }
+    }
+
+    private func activityTint(_ state: CodexActivityState) -> Color {
+        switch state {
+        case .idle: return cyan
+        case .running: return cyan
+        case .needsInput: return .orange
+        case .ready: return mint
+        case .blocked: return .red
+        }
     }
 
     private var glassGradient: LinearGradient {
@@ -833,7 +1151,7 @@ struct DashboardView: View {
     private var compactHeader: some View {
         HStack(spacing: 12) {
             PetAnimationView(
-                motion: store.isExhausted ? .fainted : (store.isAlarmActive ? .alarm : .idle)
+                motion: petMotion
             )
                 .frame(width: 76, height: 84)
                 .background {
@@ -851,14 +1169,13 @@ struct DashboardView: View {
 
             if let snapshot = store.snapshot {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(
-                        store.isExhausted
-                            ? "CODEX EMPTY"
-                            : (store.isAlarmActive ? "CODEX ALERT" : "CODEX BUDGET")
-                    )
+                    Text(compactStatusTitle)
                         .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .tracking(1.1)
-                        .foregroundStyle(store.isAlarmActive ? Color.red.opacity(0.92) : Color.white.opacity(0.58))
+                        .foregroundStyle(
+                            store.primaryActivity.map { activityTint($0.state).opacity(0.92) }
+                                ?? (store.isAlarmActive ? Color.red.opacity(0.92) : Color.white.opacity(0.58))
+                        )
 
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text("\(store.displayedRemaining)%")
@@ -867,10 +1184,22 @@ struct DashboardView: View {
                         Text(
                             store.isExhausted
                                 ? "短短晕倒了"
-                                : (store.isAlarmActive ? "快敲门" : "剩余")
+                                : (
+                                    store.isAlarmActive
+                                        ? "快敲门"
+                                        : (store.primaryActivity?.state.title ?? "剩余")
+                                )
                         )
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(store.isExhausted ? panelAccent : (store.isAlarmActive ? Color.red : mint))
+                            .foregroundStyle(
+                                store.isExhausted
+                                    ? panelAccent
+                                    : (
+                                        store.isAlarmActive
+                                            ? Color.red
+                                            : store.primaryActivity.map { activityTint($0.state) } ?? mint
+                                    )
+                            )
                     }
 
                     GeometryReader { geometry in
@@ -893,7 +1222,12 @@ struct DashboardView: View {
                             : (
                                 store.isAlarmActive
                                     ? "额度只剩 10% · 短短来敲门了"
-                                    : "7天 \(tokenText(store.sevenDayTokens))  ·  累计 \(tokenText(snapshot.tokens.summary.lifetimeTokens))"
+                                    : (
+                                        store.primaryActivity.map {
+                                            "\($0.workspace) · \($0.detail)"
+                                        }
+                                            ?? "7天 \(tokenText(store.sevenDayTokens))  ·  累计 \(tokenText(snapshot.tokens.summary.lifetimeTokens))"
+                                    )
                             )
                     )
                     .font(.system(size: 9, design: .rounded))
@@ -964,6 +1298,8 @@ struct DashboardView: View {
                     .padding(12)
                     .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 }
+
+                activitySection
 
                 sectionTitle("订阅与额度")
                 HStack {
@@ -1075,6 +1411,80 @@ struct DashboardView: View {
         .frame(maxHeight: 510)
     }
 
+    private var activitySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionTitle("Codex 对话进度")
+                Spacer()
+                Text(store.activities.filter { $0.state != .idle }.isEmpty ? "暂无活动" : "实时")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        store.activities.contains { $0.state == .needsInput }
+                            ? Color.orange
+                            : mint
+                    )
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.white.opacity(0.055), in: Capsule())
+            }
+
+            let visibleActivities = store.activities.filter { $0.state != .idle }
+            if visibleActivities.isEmpty {
+                HStack(spacing: 9) {
+                    Image(systemName: store.activityMonitoringEnabled ? "waveform.path" : "pause.circle")
+                        .foregroundStyle(store.activityMonitoringEnabled ? cyan : Color.secondary)
+                    Text(
+                        store.activityMonitoringEnabled
+                            ? "短短正在等待 Codex 开始新任务"
+                            : "对话进度监听已暂停"
+                    )
+                        .font(.system(size: 10, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.50))
+                    Spacer()
+                }
+                .padding(10)
+                .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+            } else {
+                ForEach(visibleActivities.prefix(6)) { activity in
+                    ActivityRowView(activity: activity) {
+                        store.openActivity(activity)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    store.toggleActivityMonitoring()
+                } label: {
+                    Label(
+                        store.activityMonitoringEnabled ? "监听中" : "已暂停",
+                        systemImage: store.activityMonitoringEnabled ? "eye.fill" : "eye.slash"
+                    )
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    store.toggleVoiceProgress()
+                } label: {
+                    Label(
+                        store.voiceProgressEnabled ? "语音开" : "语音关",
+                        systemImage: store.voiceProgressEnabled ? "speaker.wave.2.fill" : "speaker.slash"
+                    )
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    store.testActivityProgress()
+                } label: {
+                    Label("测试四态", systemImage: "play.fill")
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .controlSize(.small)
+        }
+    }
+
     private func sectionTitle(_ title: String) -> some View {
         Text(title)
             .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -1106,6 +1516,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: UsageStore!
     private var hostingView: NSHostingView<DashboardView>!
     private let notificationDelegate = NotificationDelegate()
+    private let speechSynthesizer = AVSpeechSynthesizer()
+    private var activityMonitoringMenuItem: NSMenuItem!
+    private var voiceProgressMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -1113,6 +1526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store = UsageStore()
         store.onAlarm = { [weak self] remaining, isTest in
             self?.presentAlarm(remaining: remaining, isTest: isTest)
+        }
+        store.onActivityEvent = { [weak self] activity, notify, speak in
+            self?.presentActivityEvent(activity, notify: notify, speak: speak)
         }
 
         configurePanel()
@@ -1136,6 +1552,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("--test-fainted") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
                 self?.store.testFainted()
+            }
+        }
+        if ProcessInfo.processInfo.arguments.contains("--test-activity") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.store.testActivityProgress()
             }
         }
     }
@@ -1190,6 +1611,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "测试 10% 敲门报警", action: #selector(testAlarm), keyEquivalent: "")
         menu.addItem(withTitle: "测试 0% 短短晕倒", action: #selector(testFainted), keyEquivalent: "")
         menu.addItem(.separator())
+        activityMonitoringMenuItem = menu.addItem(
+            withTitle: "监听 Codex 对话进度",
+            action: #selector(toggleActivityMonitoring),
+            keyEquivalent: ""
+        )
+        activityMonitoringMenuItem.state = store.activityMonitoringEnabled ? .on : .off
+        voiceProgressMenuItem = menu.addItem(
+            withTitle: "语音播报对话进度",
+            action: #selector(toggleVoiceProgress),
+            keyEquivalent: ""
+        )
+        voiceProgressMenuItem.state = store.voiceProgressEnabled ? .on : .off
+        menu.addItem(
+            withTitle: "测试对话进度四态",
+            action: #selector(testActivityProgress),
+            keyEquivalent: ""
+        )
+        menu.addItem(.separator())
         menu.addItem(withTitle: "退出短短用量助手", action: #selector(quit), keyEquivalent: "q")
 
         // A normal click toggles the panel. Right click opens the menu.
@@ -1231,6 +1670,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showPanel()
     }
 
+    @objc private func toggleActivityMonitoring() {
+        store.toggleActivityMonitoring()
+        activityMonitoringMenuItem.state = store.activityMonitoringEnabled ? .on : .off
+        showPanel()
+    }
+
+    @objc private func toggleVoiceProgress() {
+        store.toggleVoiceProgress()
+        voiceProgressMenuItem.state = store.voiceProgressEnabled ? .on : .off
+    }
+
+    @objc private func testActivityProgress() {
+        store.testActivityProgress()
+        showPanel()
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
     }
@@ -1265,6 +1720,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         content.sound = .default
         let request = UNNotificationRequest(identifier: "duanduan-usage-\(UUID().uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    private func presentActivityEvent(
+        _ activity: CodexActivity,
+        notify: Bool,
+        speak: Bool
+    ) {
+        if notify {
+            showPanel()
+            if activity.state == .needsInput {
+                store.expanded = true
+                NSApp.requestUserAttention(.criticalRequest)
+                NSSound(named: "Pop")?.play()
+            } else if activity.state == .ready {
+                NSSound(named: "Glass")?.play()
+            } else if activity.state == .blocked {
+                NSApp.requestUserAttention(.criticalRequest)
+                NSSound(named: "Basso")?.play()
+            }
+
+            let content = UNMutableNotificationContent()
+            switch activity.state {
+            case .needsInput:
+                content.title = "短短来敲门：Codex 需要你"
+            case .ready:
+                content.title = "短短报告：Codex 任务完成"
+            case .blocked:
+                content.title = "短短提醒：Codex 遇到问题"
+            case .running, .idle:
+                content.title = "短短 · Codex 对话进度"
+            }
+            content.body = "\(activity.workspace)：\(activity.detail)"
+            content.sound = .default
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(
+                    identifier: "duanduan-activity-\(activity.id)-\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+            )
+        }
+
+        if speak {
+            let phrase: String
+            switch activity.state {
+            case .needsInput:
+                phrase = "短短提醒你，Codex 需要确认或回答。"
+            case .ready:
+                phrase = "短短报告，Codex 任务已经完成。"
+            case .blocked:
+                phrase = "短短提醒你，Codex 任务遇到了问题。"
+            case .running:
+                phrase = activity.detail
+            case .idle:
+                return
+            }
+            speechSynthesizer.stopSpeaking(at: .immediate)
+            let utterance = AVSpeechUtterance(string: phrase)
+            utterance.voice = AVSpeechSynthesisVoice(language: "zh-CN")
+            utterance.rate = 0.48
+            speechSynthesizer.speak(utterance)
+        }
     }
 }
 

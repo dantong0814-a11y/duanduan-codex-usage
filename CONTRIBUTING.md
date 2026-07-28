@@ -9,7 +9,7 @@ Issues and pull requests are welcome.
 3. Start the demo UI without account data:
 
    ```bash
-   open "build/Duanduan Usage.app" --args --demo --expanded
+   open "build/Duanduan Usage.app" --args --demo --expanded --test-activity
    ```
 
 4. Run `./scripts/check.sh` before opening a pull request.
