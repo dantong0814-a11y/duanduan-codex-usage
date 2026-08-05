@@ -5,6 +5,14 @@ SCRIPT_DIR="${0:A:h}"
 PROJECT_DIR="${SCRIPT_DIR:h}"
 
 "${SCRIPT_DIR}/build.sh"
+
+TEST_BINARY="$(mktemp -d)/UsageAlertGateTests"
+xcrun swiftc \
+  "${PROJECT_DIR}/Sources/UsageAlertGate.swift" \
+  "${PROJECT_DIR}/Tests/UsageAlertGateTests.swift" \
+  -o "${TEST_BINARY}"
+"${TEST_BINARY}"
+
 plutil -lint "${PROJECT_DIR}/Info.plist"
 codesign --verify --deep --strict --verbose=2 "${PROJECT_DIR}/build/Duanduan Usage.app"
 

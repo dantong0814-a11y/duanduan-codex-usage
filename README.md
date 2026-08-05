@@ -38,8 +38,10 @@ At **0% remaining**, Duanduan plays a one-shot collapse animation and remains
 fainted. The normal idle animation returns automatically after the quota
 recovers.
 
-The automatic warning fires once per reset window. A built-in test button lets
-you preview it at any time.
+The automatic warning fires once per continuous low-quota episode. It rearms
+only after all active limits recover above 10%, so drifting reset estimates
+cannot retrigger the alarm every minute. A built-in test button lets you preview
+it at any time.
 
 ## Conversation companion
 

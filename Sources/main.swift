@@ -269,13 +269,26 @@ final class UsageStore: ObservableObject {
     var onExpandedChange: ((Bool) -> Void)?
 
     init() {
-        activityMonitoringEnabled = UserDefaults.standard.object(
+        let defaults = UserDefaults.standard
+        activityMonitoringEnabled = defaults.object(
             forKey: "activityMonitoringEnabled"
         ) as? Bool ?? true
-        voiceProgressEnabled = UserDefaults.standard.bool(forKey: "voiceProgressEnabled")
-        readCompletions = UserDefaults.standard.dictionary(
+        voiceProgressEnabled = defaults.bool(forKey: "voiceProgressEnabled")
+        readCompletions = defaults.dictionary(
             forKey: "activityReadCompletions"
         ) as? [String: TimeInterval] ?? [:]
+
+        // Older builds keyed alerts by the API's estimated reset timestamp. That
+        // timestamp can drift on every refresh, causing repeated alarms. Preserve
+        // an existing low-usage alert as a single latched episode during upgrade.
+        if defaults.object(forKey: UsageAlertGate.latchKey) == nil {
+            let alreadyAlerted = defaults.dictionaryRepresentation().contains { key, value in
+                key.hasPrefix("alerted.") && (value as? Bool == true)
+            }
+            if alreadyAlerted {
+                defaults.set(true, forKey: UsageAlertGate.latchKey)
+            }
+        }
     }
 
     func start(demo: Bool = false) {
@@ -476,16 +489,16 @@ final class UsageStore: ObservableObject {
     }
 
     private func evaluateAlarm(_ snapshot: UsageSnapshot) {
-        guard let remaining = minimumRemaining, remaining <= 10 else { return }
-        let windows = activeRateWindows
-        let resetKey = windows
-            .compactMap { $0.window.resetsAt }
-            .map(String.init)
-            .sorted()
-            .joined(separator: "-")
-        let alertKey = "alerted.\(resetKey.isEmpty ? "no-reset" : resetKey)"
-        guard !UserDefaults.standard.bool(forKey: alertKey) else { return }
-        UserDefaults.standard.set(true, forKey: alertKey)
+        let defaults = UserDefaults.standard
+        let wasLatched = defaults.bool(forKey: UsageAlertGate.latchKey)
+        let decision = UsageAlertGate.evaluate(
+            remaining: minimumRemaining,
+            isLatched: wasLatched
+        )
+        if decision.isLatched != wasLatched {
+            defaults.set(decision.isLatched, forKey: UsageAlertGate.latchKey)
+        }
+        guard decision.shouldAlert, let remaining = minimumRemaining else { return }
         activateAlarm(remaining: remaining, isTest: false)
     }
 
